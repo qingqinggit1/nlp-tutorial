@@ -511,8 +511,9 @@ if __name__ == '__main__':
     # 测试模型训练的好坏，这里假设
     predict, _, _, _ = model(enc_inputs, dec_inputs)
     predict = predict.data.max(1, keepdim=True)[1]
+    # 预测
     print(sentences[0], '->', [number_dict[n.item()] for n in predict.squeeze()])
-
+    # 显示编码器和和解码器的attention值
     print('first head of last state enc_self_attns')
     showgraph(enc_self_attns)
 
