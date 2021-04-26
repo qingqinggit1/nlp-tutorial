@@ -98,7 +98,7 @@ def get_attn_subsequent_mask(seq):
     序列部分的注意力
     :param seq: tensor([[5, 1, 2, 3, 4]]), 形状 【1，5】， batch_size, seq_len
     :type seq:
-    :return:
+    :return:  torch.Size([1, 5, 5])
     :rtype:
     """
     # 设定下注意力的形状
@@ -106,7 +106,7 @@ def get_attn_subsequent_mask(seq):
     # eg: subsequent_mask : [[[0. 1. 1. 1. 1.],  [0. 0. 1. 1. 1.],  [0. 0. 0. 1. 1.],  [0. 0. 0. 0. 1.],  [0. 0. 0. 0. 0.]]]
     # 初始化一个注意力形状的上三角矩阵，因为我们从头往后预测，所以模型只有预测出来后才能看到单词, subsequent_mask, shape: torch.Size([1, 5, 5])
     subsequent_mask = np.triu(np.ones(attn_shape), k=1)
-    # 形状不变，转出tensor格式
+    # 形状不变，转出tensor格式, torch.Size([1, 5, 5])
     subsequent_mask = torch.from_numpy(subsequent_mask).byte()
     return subsequent_mask
 
@@ -281,20 +281,25 @@ class DecoderLayer(nn.Module):
     def forward(self, dec_inputs, enc_outputs, dec_self_attn_mask, dec_enc_attn_mask):
         """
 
-        :param dec_inputs:
+        :param dec_inputs: torch.Size([1, 5, 512])
         :type dec_inputs:
-        :param enc_outputs:
+        :param enc_outputs:  torch.Size([1, 5, 512])
         :type enc_outputs:
-        :param dec_self_attn_mask:
+        :param dec_self_attn_mask:   torch.Size([1, 5, 5])
         :type dec_self_attn_mask:
-        :param dec_enc_attn_mask:
+        :param dec_enc_attn_mask:   torch.Size([1, 5, 5])
         :type dec_enc_attn_mask:
         :return:
         :rtype:
         """
+        # 解码的输入的self-attention   dec_outputs: torch.Size([1, 5, 512]),  dec_self_attn: torch.Size([1, 8, 5, 5])
         dec_outputs, dec_self_attn = self.dec_self_attn(dec_inputs, dec_inputs, dec_inputs, dec_self_attn_mask)
+        # 解码的输出和编码的输出的隐层向量之间的attention， 计算之后是真正的dec_outputs，解码输出
+        # dec_outputs: torch.Size([1, 5, 512])   dec_enc_attn: torch.Size([1, 8, 5, 5])
         dec_outputs, dec_enc_attn = self.dec_enc_attn(dec_outputs, enc_outputs, enc_outputs, dec_enc_attn_mask)
+        # 解码输出经过FFN
         dec_outputs = self.pos_ffn(dec_outputs)
+        # 得到返回结果
         return dec_outputs, dec_self_attn, dec_enc_attn
 
 class Encoder(nn.Module):
@@ -366,15 +371,34 @@ class Decoder(nn.Module):
         dec_outputs = self.tgt_emb(dec_inputs) + self.pos_emb(torch.LongTensor([[5,1,2,3,4]]))
         # 和encoder一样，计算哪些位置时padding的，计算注意力时，剔除掉这个padding的位置
         dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
-        # 上三角矩阵的注意力mask
+        # 上三角矩阵的注意力mask, 返回形状 torch.Size([1, 5, 5])
         dec_self_attn_subsequent_mask = get_attn_subsequent_mask(dec_inputs)
-        #
+        #gt: greater than ,dec_self_attn_pad_mask + dec_self_attn_subsequent_mask 得到的形状是:
+        # tensor([[[0, 1, 1, 1, 1],
+        #          [0, 0, 1, 1, 1],
+        #          [0, 0, 0, 1, 1],
+        #          [0, 0, 0, 0, 1],
+        #          [0, 0, 0, 0, 0]]], dtype=torch.uint8)
+        #  和0比较，大于0的为True，否则为False
+        # dec_self_attn_mask的得到的结果是
+        # tensor([[[False, True, True, True, True],
+        #          [False, False, True, True, True],
+        #          [False, False, False, True, True],
+        #          [False, False, False, False, True],
+        #          [False, False, False, False, False]]])
         dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequent_mask), 0)
-        # 
+        # 计算pad的mask的位置, 这里是输入序列和输出序列之间计算
+        # dec_enc_attn_mask计算后得到的结果是
+        # tensor([[[False, False, False, False, True],
+        #          [False, False, False, False, True],
+        #          [False, False, False, False, True],
+        #          [False, False, False, False, True],
+        #          [False, False, False, False, True]]])
         dec_enc_attn_mask = get_attn_pad_mask(dec_inputs, enc_inputs)
-
+        # 保存decoder 的self-attention值和 decoder encoder attention值
         dec_self_attns, dec_enc_attns = [], []
         for layer in self.layers:
+            # dec_outputs: torch.Size([1, 5, 512])  dec_self_attn: torch.Size([1, 8, 5, 5]) dec_enc_attn: torch.Size([1, 8, 5, 5])
             dec_outputs, dec_self_attn, dec_enc_attn = layer(dec_outputs, enc_outputs, dec_self_attn_mask, dec_enc_attn_mask)
             dec_self_attns.append(dec_self_attn)
             dec_enc_attns.append(dec_enc_attn)
@@ -406,12 +430,13 @@ class Transformer(nn.Module):
         """
         #先把源序列enc_inputs进行 encoder,
         enc_outputs, enc_self_attns = self.encoder(enc_inputs)
-        # encoder结束后得到encoder的向量和对应的attention值, 开始decoder
+        # encoder结束后得到encoder的向量和对应的attention值, 开始decoder   dec_outputs: torch.Size([1, 5, 512])
         dec_outputs, dec_self_attns, dec_enc_attns = self.decoder(dec_inputs, enc_inputs, enc_outputs)
-        #线性映射
+        #线性映射  dec_logits: torch.Size([1, 5, 7])
         dec_logits = self.projection(dec_outputs) # dec_logits : [batch_size x src_vocab_size x tgt_vocab_size]
-        #
-        return dec_logits.view(-1, dec_logits.size(-1)), enc_self_attns, dec_self_attns, dec_enc_attns
+        #dec_logits.size(-1)表示最后一个维度, flatten_logit 拉平了维度, flatten_logit: torch.Size([5, 7]), 输出序列长度为5，每个单词对应的字典中的概率，字典中7个字
+        flatten_logit = dec_logits.view(-1, dec_logits.size(-1))
+        return flatten_logit, enc_self_attns, dec_self_attns, dec_enc_attns
 
 def showgraph(attn):
     """
