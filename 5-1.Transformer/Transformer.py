@@ -8,6 +8,9 @@ import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
 # S: Symbol that shows starting of decoding input
 # E: Symbol that shows starting of decoding output
 # P: Symbol that will fill in blank sequence if current batch data size is short than time steps
@@ -24,9 +27,9 @@ def get_sinusoid_encoding_table(n_position, d_model):
     def get_posi_angle_vec(position):
         return [cal_angle(position, hid_j) for hid_j in range(d_model)]
 
-    sinusoid_table = np.array([get_posi_angle_vec(pos_i) for pos_i in range(n_position)])
-    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
-    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
+    sinusoid_table = np.array([get_posi_angle_vec(pos_i) for pos_i in range(n_position)]) #代表6个位置
+    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i  偶数位置做sin
+    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1 奇数位置做cos
     return torch.FloatTensor(sinusoid_table)
 
 def get_attn_pad_mask(seq_q, seq_k):
@@ -56,8 +59,8 @@ class ScaledDotProductAttention(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(self):
         super(MultiHeadAttention, self).__init__()
-        self.W_Q = nn.Linear(d_model, d_k * n_heads)
-        self.W_K = nn.Linear(d_model, d_k * n_heads)
+        self.W_Q = nn.Linear(d_model, d_k * n_heads) #（512，64*8=512）Q，K，V 维度相同
+        self.W_K = nn.Linear(d_model, d_k * n_heads) #Linear(in_features: 512, out_features: 512, bias = True)
         self.W_V = nn.Linear(d_model, d_v * n_heads)
         self.linear = nn.Linear(n_heads * d_v, d_model)
         self.layer_norm = nn.LayerNorm(d_model)
@@ -78,12 +81,12 @@ class MultiHeadAttention(nn.Module):
         output = self.linear(context)
         return self.layer_norm(output + residual), attn # output: [batch_size x len_q x d_model]
 
-class PoswiseFeedForwardNet(nn.Module):
+class PoswiseFeedForwardNet(nn.Module): #位置全馈网络
     def __init__(self):
         super(PoswiseFeedForwardNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
+        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1) #内核大小为1的两个卷积。输入和输出的维度为 d_{model} =512，内层的维度为 d_{ff} =2048。
         self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
-        self.layer_norm = nn.LayerNorm(d_model)
+        self.layer_norm = nn.LayerNorm(d_model) #层归一化？？模型更加稳定
 
     def forward(self, inputs):
         residual = inputs # inputs : [batch_size, len_q, d_model]
@@ -118,13 +121,13 @@ class DecoderLayer(nn.Module):
 class Encoder(nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
-        self.src_emb = nn.Embedding(src_vocab_size, d_model)
-        self.pos_emb = nn.Embedding.from_pretrained(get_sinusoid_encoding_table(src_len+1, d_model),freeze=True)
+        self.src_emb = nn.Embedding(src_vocab_size, d_model) #初始化enbedding (5,512)
+        self.pos_emb = nn.Embedding.from_pretrained(get_sinusoid_encoding_table(src_len+1, d_model),freeze=True) #(6,512)freeze只加载，不训练
         self.layers = nn.ModuleList([EncoderLayer() for _ in range(n_layers)])
 
     def forward(self, enc_inputs): # enc_inputs : [batch_size x source_len]
-        enc_outputs = self.src_emb(enc_inputs) + self.pos_emb(torch.LongTensor([[1,2,3,4,0]]))
-        enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
+        enc_outputs = self.src_emb(enc_inputs) + self.pos_emb(torch.LongTensor([[1,2,3,4,0]]))  # （1，5，512） 一共5个单词，每个单词用512维表示  1：表示batchsize为1
+        enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)   #作用？？？
         enc_self_attns = []
         for layer in self.layers:
             enc_outputs, enc_self_attn = layer(enc_outputs, enc_self_attn_mask)
@@ -134,7 +137,7 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
-        self.tgt_emb = nn.Embedding(tgt_vocab_size, d_model)
+        self.tgt_emb = nn.Embedding(tgt_vocab_size, d_model) #（7，512）
         self.pos_emb = nn.Embedding.from_pretrained(get_sinusoid_encoding_table(tgt_len+1, d_model),freeze=True)
         self.layers = nn.ModuleList([DecoderLayer() for _ in range(n_layers)])
 
@@ -156,9 +159,9 @@ class Decoder(nn.Module):
 class Transformer(nn.Module):
     def __init__(self):
         super(Transformer, self).__init__()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.projection = nn.Linear(d_model, tgt_vocab_size, bias=False)
+        self.encoder = Encoder() #编码器
+        self.decoder = Decoder() #解码器
+        self.projection = nn.Linear(d_model, tgt_vocab_size, bias=False) #全连接
     def forward(self, enc_inputs, dec_inputs):
         enc_outputs, enc_self_attns = self.encoder(enc_inputs)
         dec_outputs, dec_self_attns, dec_enc_attns = self.decoder(dec_inputs, enc_inputs, enc_outputs)
@@ -179,16 +182,16 @@ if __name__ == '__main__':
     sentences = ['ich mochte ein bier P', 'S i want a beer', 'i want a beer E']
 
     # Transformer Parameters
-    # Padding Should be Zero
+    # Padding Should be Zero 输入数据的字典
     src_vocab = {'P': 0, 'ich': 1, 'mochte': 2, 'ein': 3, 'bier': 4}
-    src_vocab_size = len(src_vocab)
-
+    src_vocab_size = len(src_vocab) # 5
+    #输出数据字典
     tgt_vocab = {'P': 0, 'i': 1, 'want': 2, 'a': 3, 'beer': 4, 'S': 5, 'E': 6}
     number_dict = {i: w for i, w in enumerate(tgt_vocab)}
-    tgt_vocab_size = len(tgt_vocab)
+    tgt_vocab_size = len(tgt_vocab) # 7
 
-    src_len = 5 # length of source
-    tgt_len = 5 # length of target
+    src_len = 5 # length of source 输入5个单词
+    tgt_len = 5 # length of target 输出5个单词
 
     d_model = 512  # Embedding Size
     d_ff = 2048  # FeedForward dimension
@@ -200,7 +203,8 @@ if __name__ == '__main__':
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-
+    # 分别是sentences[0]   sentences[1]    sentences[2]
+    # enc_inputs:tensor([[1, 2, 3, 4, 0]]) dec_inputs:tensor([[5, 1, 2, 3, 4]]) target_batch tensor([[1, 2, 3, 4, 6]])
     enc_inputs, dec_inputs, target_batch = make_batch(sentences)
 
     for epoch in range(20):

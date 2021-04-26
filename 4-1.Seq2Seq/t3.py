@@ -21,8 +21,8 @@ def make_batch(input_data):
             seq[i] = seq[i] + 'P' * (n_step - len(seq[i]))
 
         input = [num_dic[n] for n in seq[0]]  #input：[15, 3, 16, 2, 2]
-        output = [num_dic[n] for n in ('S' + seq[1])]  #output：[0, 25, 17, 15, 7, 16] S:start
-        target = [num_dic[n] for n in (seq[1] + 'E')]  #target：[25, 17, 15, 7, 16, 1] E:end
+        output = [num_dic[n] for n in ('S' + seq[1])]  #output：[0, 25, 17, 15, 7, 16]
+        target = [num_dic[n] for n in (seq[1] + 'E')]  #target：[25, 17, 15, 7, 16, 1]
 
         input_batch.append(np.eye(n_class)[input])  #shape：(5,29)
         output_batch.append(np.eye(n_class)[output]) #shape:(6,29）
